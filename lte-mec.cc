@@ -229,7 +229,7 @@ main (int argc, char *argv[])
   NetDeviceContainer enbLteDevs = lteHelper->InstallEnbDevice (enbNodes);
   NetDeviceContainer ueLteDevs = lteHelper->InstallUeDevice (ueNodes);
 
-//  p2ph.EnablePcapAll("0302");
+  p2ph.EnablePcapAll("0304");
   
   // Install the IP stack on the UEs 
   internet.Install (ueNodes);
@@ -328,8 +328,12 @@ main (int argc, char *argv[])
     ulClient.SetAttribute ("PacketSize", UintegerValue(140)); 
 
     pedclientApps.Add (ulClient.Install (pedNodes.Get(u))); //지금 가져 UE node에 client app설치 UDP app
-}
+    ulClient.SetFill(pedclientApps.Get(u), "Hello World I am Ewha womans univ Student");
+}  
 
+
+  //vehicle이 초기에 MEC에게 패킷을 보내는 과정이 필요
+  //보내지 않으면 MEC쪽에 vehicle UE에 대한 정보가 없어 추후 MEC->Vehicle app 실행에 unknown UE address error occur
   for (uint32_t u = 0; u < vehNodes.GetN (); ++u)
   {
   //해당 노드(vehicle or pedestrian..)만의 port num을 가지고 serverapp과의 커넥션
@@ -345,7 +349,6 @@ main (int argc, char *argv[])
     NS_LOG_LOGIC("targetHostAddr = " << targetAddr);
     UdpClientHelper vehClient (InetSocketAddress(targetAddr, udpPort_veh)); 
     vehClient.SetAttribute ("Interval", TimeValue (MilliSeconds(interPacketInterval))); //100msec마다 패킷 전송
-    // 이 부분을 My Algorithm을 추가해서 interPacketInterval을 구하도록 해야함!! 동적으로 변화하는 report timing
     vehClient.SetAttribute ("MaxPackets", UintegerValue(1000000)); 
     vehClient.SetAttribute ("PacketSize", UintegerValue(140)); 
 
@@ -374,7 +377,8 @@ main (int argc, char *argv[])
     mecclientApps.Add (mecClient.Install (targetHost)); //지금 가져 UE node에 client app설치 UDP app
   }
 
-
+  //0~0.99sec: INITIAL STEP - vehicle nodes and pedestrian nodes (UE nodes) send their packet to MEC server
+  //after Initial step - MEC server broadcast to vehicles & vehicle only receive packet not sending 
 
   mecclientApps.Start (Seconds (1.0)); //client only send
   mecclientApps.Stop (Seconds (simTime)); //client only sent
@@ -384,7 +388,7 @@ main (int argc, char *argv[])
   pedclientApps.Stop (Seconds (simTime)); //client only sent
   
   vehclientApps.Start (Seconds (0.01)); //client only send
-  vehclientApps.Stop (Seconds (simTime)); //client only sent
+  vehclientApps.Stop (Seconds (0.99)); //client only sent
   
   vehserverApps.Start (Seconds (0.01)); //server only receive
   serverApps.Start (Seconds (0.01)); //server only receive
@@ -405,7 +409,7 @@ main (int argc, char *argv[])
 
   Simulator::Stop(Seconds(simTime));
   
-  AnimationInterface anim("0301anim.xml");
+  AnimationInterface anim("0304anim.xml");
   Simulator::Run();
 
   /*GtkConfigStore config;
