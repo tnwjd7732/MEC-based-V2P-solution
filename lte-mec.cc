@@ -36,12 +36,15 @@
 #include "ns3/point-to-point-helper.h"
 #include "ns3/config-store.h"
 #include "ns3/ns2-mobility-helper.h"
+#include "ns3/trace-helper.h"
 //#include "ns3/gtk-config-store.h"
 
 #include "ns3/flow-monitor.h"
 #include "ns3/flow-monitor-helper.h"
 
 #include "ns3/netanim-module.h"
+#include "ns3/ipv4-nix-vector-helper.h"
+#include "ns3/ipv4-list-routing-helper.h"
 
 using namespace ns3;
 
@@ -86,8 +89,8 @@ main (int argc, char *argv[])
   }
 
 
-  uint16_t numberOfNodes = 1; //UE 명수 
-  uint16_t numberOfPed = 1; //UE 명수 
+  uint16_t numberOfNodes = 8; //UE 명수 
+  uint16_t numberOfPed = 5; //UE 명수 
   double simTime = 25.1; 
   double distance = 60.0; //enodeB간 거리
   double interPacketInterval = 100; //0.1초마다 1개의 패킷 전송
@@ -135,11 +138,22 @@ main (int argc, char *argv[])
 
   ConfigStore inputConfig;
   inputConfig.ConfigureDefaults();
+  
+
 
   // parse again so you can override default values from the command line
   cmd.Parse(argc, argv);
   
   Ptr<Node> pgw = epcHelper->GetPgwNode ();
+
+  Ipv4NixVectorHelper nixRouting;
+  Ipv4StaticRoutingHelper staticRouting;
+  Ipv4ListRoutingHelper list;
+  
+  list.Add(staticRouting, 0);
+  list.Add(nixRouting, 10);
+
+
 
   // Create a single RemoteHost
   //실험에서 UE-eNB-MEC server는이므로 사실상 remoteHost로 가는 패킷 없음
@@ -147,7 +161,11 @@ main (int argc, char *argv[])
   remoteHostContainer.Create (1);
   Ptr<Node> remoteHost = remoteHostContainer.Get (0);
   InternetStackHelper internet;
+  internet.SetRoutingHelper(list);
   internet.Install (remoteHostContainer);
+
+
+
 
   // Create the Internet
   PointToPointHelper p2ph; //pgw-remotehost간 p2p link(그게Internet?) 생성과 attach
@@ -167,10 +185,11 @@ main (int argc, char *argv[])
   NS_LOG_LOGIC("PGW addr: " << pgwAddr);
 
 
-  //Routing - 확실하지 않지 remotehost로 가기위한 길을 static으로, 7.0.0.1은 pgw
+  //Routing
   Ipv4StaticRoutingHelper ipv4RoutingHelper;
   Ptr<Ipv4StaticRouting> remoteHostStaticRouting = ipv4RoutingHelper.GetStaticRouting (remoteHost->GetObject<Ipv4> ());
   remoteHostStaticRouting->AddNetworkRouteTo (Ipv4Address ("7.0.0.0"), Ipv4Mask ("255.0.0.0"), 1);
+
 
   NodeContainer ueNodes; 
   NodeContainer enbNodes;
@@ -210,6 +229,8 @@ main (int argc, char *argv[])
   NetDeviceContainer enbLteDevs = lteHelper->InstallEnbDevice (enbNodes);
   NetDeviceContainer ueLteDevs = lteHelper->InstallUeDevice (ueNodes);
 
+//  p2ph.EnablePcapAll("0302");
+  
   // Install the IP stack on the UEs 
   internet.Install (ueNodes);
   Ipv4InterfaceContainer ueIpIface;
@@ -222,6 +243,7 @@ main (int argc, char *argv[])
     Ptr<Ipv4StaticRouting> ueStaticRouting = ipv4RoutingHelper.GetStaticRouting (ueNode->GetObject<Ipv4> ());
     ueStaticRouting->SetDefaultRoute (epcHelper->GetUeDefaultGatewayAddress (), 1);
   }
+
 
   // Attach one UE per eNodeB
   for (uint16_t i = 0; i < numberOfNodes; i++)
@@ -239,7 +261,7 @@ main (int argc, char *argv[])
   NodeContainer pedNodes; //pedestrian과 vehicle모두 UE이지만, 다른 application을 설치하고 다르게 관리하기 위해서 두개의 node container로 구
   NodeContainer vehNodes;
   
-  for(int u=0; u< numberOfNodes - numberOfPed - 1; u++) {
+  for(int u=0; u< numberOfNodes - numberOfPed; u++) {
     Ptr<Node> vehicle = ueNodes.Get (u);
     vehNodes.Add(vehicle);
   }
@@ -249,25 +271,28 @@ main (int argc, char *argv[])
     pedNodes.Add(pedestrian);
   
   }
+
+  
+
 //=======================================application==================================================
 
   // Install and start applications and packet sinks
 
   uint16_t udpPort = 2000;
-  ApplicationContainer clientApps; //MEC server에게 보내는 pedestrian app
+  uint16_t udpPort_mec = 1200;
+    uint16_t udpPort_veh = 3200;
+  
+  ApplicationContainer pedclientApps; //MEC server에게 보내는 pedestrian app
+  ApplicationContainer mecclientApps; //Vehicle에게 보내는 MEC app
   ApplicationContainer serverApps; //pedestrian에게 받는 MEC app
+  ApplicationContainer vehserverApps; //MEC에게 받는 vehicle app
+  ApplicationContainer vehclientApps; //통신 초기 등록을 위해 한번만 보내는 app
 
   bool useMecOnEnb = true; //true --> MEC on eNB 
   bool useMecOnPgw = false;//true --> MEC on PGW (if not on eNB) 
   //if both above are false, no MEC, packet sinks are on remote host
 
-  for (uint32_t u = 0; u < pedNodes.GetN (); ++u)
-  {
-  //해당 노드(vehicle or pedestrian..)만의 port num을 가지고 serverapp과의 커넥션
-    ++udpPort;
-    PacketSinkHelper udpPacketSinkHelper ("ns3::UdpSocketFactory", InetSocketAddress (Ipv4Address::GetAny (), udpPort));
-
-    Ptr<Node> targetHost;
+ Ptr<Node> targetHost;
     Ipv4Address targetAddr;
     if(useMecOnEnb){
       targetHost = epcHelper->GetMecNode(); //TODO: works only for 1 eNB !
@@ -281,6 +306,15 @@ main (int argc, char *argv[])
       targetHost = remoteHost; 
       targetAddr = remoteHostAddr;
     }
+    
+    
+  for (uint32_t u = 0; u < pedNodes.GetN (); ++u)
+  {
+  //해당 노드(vehicle or pedestrian..)만의 port num을 가지고 serverapp과의 커넥션
+    ++udpPort;
+    PacketSinkHelper udpPacketSinkHelper ("ns3::UdpSocketFactory", InetSocketAddress (Ipv4Address::GetAny (), udpPort));
+
+ 
 
     //targetHost(MEC server)에 udp sinkhelper를 모두 설치
     serverApps.Add (udpPacketSinkHelper.Install (targetHost)); //타겟 호스트(엣지 서버)에게 PacketSink install
@@ -291,16 +325,70 @@ main (int argc, char *argv[])
     ulClient.SetAttribute ("Interval", TimeValue (MilliSeconds(interPacketInterval))); //100msec마다 패킷 전송
     // 이 부분을 My Algorithm을 추가해서 interPacketInterval을 구하도록 해야함!! 동적으로 변화하는 report timing
     ulClient.SetAttribute ("MaxPackets", UintegerValue(1000000)); 
-    ulClient.SetAttribute ("PacketSize", UintegerValue(1400)); 
+    ulClient.SetAttribute ("PacketSize", UintegerValue(140)); 
 
-    clientApps.Add (ulClient.Install (pedNodes.Get(u))); //지금 가져 UE node에 client app설치 UDP app
+    pedclientApps.Add (ulClient.Install (pedNodes.Get(u))); //지금 가져 UE node에 client app설치 UDP app
+}
+
+  for (uint32_t u = 0; u < vehNodes.GetN (); ++u)
+  {
+  //해당 노드(vehicle or pedestrian..)만의 port num을 가지고 serverapp과의 커넥션
+    ++udpPort_veh;
+    PacketSinkHelper udpPacketSinkHelper ("ns3::UdpSocketFactory", InetSocketAddress (Ipv4Address::GetAny (), udpPort_veh));
+
+ 
+
+    //targetHost(MEC server)에 udp sinkhelper를 모두 설치
+    serverApps.Add (udpPacketSinkHelper.Install (targetHost)); //타겟 호스트(엣지 서버)에게 PacketSink install
 
 
+    NS_LOG_LOGIC("targetHostAddr = " << targetAddr);
+    UdpClientHelper vehClient (InetSocketAddress(targetAddr, udpPort_veh)); 
+    vehClient.SetAttribute ("Interval", TimeValue (MilliSeconds(interPacketInterval))); //100msec마다 패킷 전송
+    // 이 부분을 My Algorithm을 추가해서 interPacketInterval을 구하도록 해야함!! 동적으로 변화하는 report timing
+    vehClient.SetAttribute ("MaxPackets", UintegerValue(1000000)); 
+    vehClient.SetAttribute ("PacketSize", UintegerValue(140)); 
+
+    vehclientApps.Add (vehClient.Install (vehNodes.Get(u))); //지금 가져 UE node에 client app설치 UDP app
+}
+
+
+ for(uint32_t i=0; i< vehNodes.GetN(); ++i) {
+ 
+
+    //MEC Client app - 엣지 서버가 차량들에게 broadcast하는 application
+    ++udpPort_mec;
+    PacketSinkHelper udpPacketSinkHelper_veh ("ns3::UdpSocketFactory", InetSocketAddress (Ipv4Address::GetAny (), udpPort_mec));
+    //Ptr<Node> targetVeh;
+    //targetVeh = vehNodes.Get(i); //TODO: works only for 1 eNB !
+
+    vehserverApps.Add (udpPacketSinkHelper_veh.Install (vehNodes.Get(i))); //타겟 호스트(엣지 서버)에게 PacketSink install
+    NS_LOG_LOGIC(i<<"번째 자동차에 서버 앱 설치 완료 ");
+    
+    UdpClientHelper mecClient (InetSocketAddress(ueIpIface.GetAddress (i), udpPort_mec)); 
+    
+    mecClient.SetAttribute ("Interval", TimeValue (MilliSeconds(100))); //100msec마다 패킷 전송
+    mecClient.SetAttribute ("MaxPackets", UintegerValue(1000000)); 
+    mecClient.SetAttribute ("PacketSize", UintegerValue(150)); 
+
+    mecclientApps.Add (mecClient.Install (targetHost)); //지금 가져 UE node에 client app설치 UDP app
   }
 
+
+
+  mecclientApps.Start (Seconds (1.0)); //client only send
+  mecclientApps.Stop (Seconds (simTime)); //client only sent
+
+ 
+  pedclientApps.Start (Seconds (0.01)); //client only send
+  pedclientApps.Stop (Seconds (simTime)); //client only sent
+  
+  vehclientApps.Start (Seconds (0.01)); //client only send
+  vehclientApps.Stop (Seconds (simTime)); //client only sent
+  
+  vehserverApps.Start (Seconds (0.01)); //server only receive
   serverApps.Start (Seconds (0.01)); //server only receive
-  clientApps.Start (Seconds (0.01)); //client only send
-  clientApps.Stop (Seconds (simTime)); //client only sent
+
   lteHelper->EnableTraces ();
 
 //================================================application======================================================
@@ -313,6 +401,7 @@ main (int argc, char *argv[])
   Ptr<FlowMonitor> flowMonitor;
   FlowMonitorHelper flowHelper;
   flowMonitor = flowHelper.InstallAll();
+
 
   Simulator::Stop(Seconds(simTime));
   
