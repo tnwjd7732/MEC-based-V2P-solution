@@ -50,6 +50,7 @@
 #include "ns3/netanim-module.h"
 #include "ns3/ipv4-nix-vector-helper.h"
 #include "ns3/ipv4-list-routing-helper.h"
+#include "ns3/database.h"
 
 using namespace ns3;
 
@@ -68,9 +69,6 @@ CourseChange (std::ostream *os, std::string foo, Ptr<const MobilityModel> mobili
       << ", z=" << vel.z << std::endl;
 }
 
-
-
-
 //Modify packet data field (current position, velocity, angle)
 static void
 ModifyPacketData (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> app )
@@ -84,17 +82,29 @@ ModifyPacketData (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> a
    
    //Literally, sending_data is the data to be snet in a packet
    std::string sending_data; 
+   std::string pos_x, pos_y, velo_x, velo_y;
+   
+   pos_x=std::to_string(myposition.x);
+   pos_y=std::to_string(myposition.y);
+   velo_x=std::to_string(myvelocity.x);
+   velo_y=std::to_string(myvelocity.y);
    
    //Each data element in the packet is separated by "/"
-   sending_data.append(std::to_string(myposition.x)); sending_data.append("/");
-   sending_data.append(std::to_string(myposition.y)); sending_data.append("/");
-   sending_data.append(std::to_string(myposition.z)); sending_data.append("/");
-   
-   sending_data.append(std::to_string(myvelocity.x)); sending_data.append("/");
-   sending_data.append(std::to_string(myvelocity.y)); sending_data.append("/");
+   sending_data.append(pos_x); sending_data.append("/");
+   sending_data.append(pos_y); sending_data.append("/");
+ 
+  // We don't use position_z in Collision Prediction Algorithm
+  // sending_data.append(std::to_string(myposition.z)); sending_data.append("/"); 
+  
+   sending_data.append(velo_x); sending_data.append("/");
+   sending_data.append(velo_y); sending_data.append("/");
 
    udpclient.SetFill(app, sending_data);
+
 }
+
+
+
 
 NS_LOG_COMPONENT_DEFINE ("LteMecExample");
 int
@@ -121,6 +131,30 @@ main (int argc, char *argv[])
   double interPacketInterval = 100; 
   std::string traceFile; 
   std::string logFile;
+  
+  
+  //MEC서버가 보행자에게 받은 데이터를 기록, 업데이트하고 
+  //그 데이터를 100msec마다 읽어서 차량들에게 전송하는데 사용되는 공간
+  //보행자 별 update(report) 타이밍이 다르기 때문에 자료구조에서 탐색하고 재기록하는데 노드 간 순서가 없음
+  //따라서 node ID를 기준으로 빠르게 탐색할 수 있는 자료구조가 적합하다고 판단되어 Map 자료구조 사용 
+  std::map <uint16_t, std::vector <double>> db; 
+  
+  
+  //이어서 할일 - 지금 extern 헤더파일 사용해서 모든 파일에서 map에 접근 가능
+  //이젠 진짜 map 접근해서 packetsink에서는 받아온거 기록(있는지 확인하고 있으면 erase, insert)하도록 코드 추가
+  //그리고 그걸 MEC udp client app은 데이터 읽어와서 string하나로 만들어 보내기 구현
+  //받은 데이터로 veh에서 데이터 추출하고 알고리즘 돌리는건 추후에
+  //우선 가장 중요한건 packetsink - write, udpclient - read 구현하는 것!
+
+  
+  //db.insert(std::make_pair<uint16_t, std::vector<double>>(1, {1.111, 2.222, 3.333}));
+  
+  if(db.find(3)!=db.end()){
+  NS_LOG_LOGIC("find!!!찾았음 ");
+  }
+  else{
+  NS_LOG_LOGIC("not find!!!못찾았음 ");
+  }
 
   // Command line arguments
   CommandLine cmd;
@@ -357,6 +391,9 @@ main (int argc, char *argv[])
 
     pedclientApps.Add (ulClient.Install (pedNodes.Get(u))); //지금 가져온 UE node에 client app설치 UDP app
 
+    //보행자 휴대폰은 100msec마다 GPS를 수신한다는 가정
+    //변화하는 position과 velocity를 100msec마다 가져와 전송 데이터로 대기시킴 
+    //report주기와는 별개로, 0.1초마다 갱신해두면 report주기에 맞게 저장되어 있는 (setfill된) 데이터를 전송
     for(uint16_t time=0; time<simTime*100; time++){
        Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData, pedNodes.Get(u), ulClient, pedclientApps.Get(u));
     }
@@ -406,6 +443,10 @@ main (int argc, char *argv[])
     mecClient.SetAttribute ("PacketSize", UintegerValue(150)); 
 
     mecclientApps.Add (mecClient.Install (targetHost)); 
+    
+    // for(uint16_t time=10; time<simTime*100; time++){
+    //   Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData, pedNodes.Get(u), ulClient, pedclientApps.Get(u));
+   // }
   }
 
   //0~0.99sec: INITIAL STEP - vehicle nodes and pedestrian nodes (UE nodes) send their packet to MEC server
