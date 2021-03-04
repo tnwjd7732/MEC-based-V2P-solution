@@ -23,7 +23,12 @@
  * This program is based on Mikko Majanen's MEC testing code <mikko.majanen@vtt.fi>
  * Copyright (c) 2018 VTT Technical Research Centre of Finland Ltd.
  */
-
+ 
+#include <string>
+#include <vector>
+#include <sstream>
+#include <iterator>
+#include <iostream>
 #include "ns3/lte-helper.h"
 #include "ns3/epc-helper.h"
 #include "ns3/core-module.h"
@@ -48,12 +53,6 @@
 
 using namespace ns3;
 
-/**
- * Sample simulation script for LTE+MEC+EPC. A MEC server is attached to each
- * eNodeB (or PGW). MEC can run both UDP and TCP based applications.
- *
- */
-
 
 
 // Prints actual position and velocity when a course change event occurs
@@ -70,8 +69,34 @@ CourseChange (std::ostream *os, std::string foo, Ptr<const MobilityModel> mobili
 }
 
 
-NS_LOG_COMPONENT_DEFINE ("LteMecExample");
 
+
+//Modify packet data field (current position, velocity, angle)
+static void
+ModifyPacketData (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> app )
+{
+   
+   Ptr<MobilityModel> mymobility=node->GetObject<MobilityModel>();  //get mobility model
+
+   Vector myvelocity = mymobility -> GetVelocity(); //get Velocity vector
+   Vector myposition = mymobility -> GetPosition(); //get Position vector
+   
+   
+   //Literally, sending_data is the data to be snet in a packet
+   std::string sending_data; 
+   
+   //Each data element in the packet is separated by "/"
+   sending_data.append(std::to_string(myposition.x)); sending_data.append("/");
+   sending_data.append(std::to_string(myposition.y)); sending_data.append("/");
+   sending_data.append(std::to_string(myposition.z)); sending_data.append("/");
+   
+   sending_data.append(std::to_string(myvelocity.x)); sending_data.append("/");
+   sending_data.append(std::to_string(myvelocity.y)); sending_data.append("/");
+
+   udpclient.SetFill(app, sending_data);
+}
+
+NS_LOG_COMPONENT_DEFINE ("LteMecExample");
 int
 main (int argc, char *argv[])
 {
@@ -89,12 +114,12 @@ main (int argc, char *argv[])
   }
 
 
-  uint16_t numberOfNodes = 8; //UE 명수 
-  uint16_t numberOfPed = 5; //UE 명수 
-  double simTime = 25.1; 
-  double distance = 60.0; //enodeB간 거리
-  double interPacketInterval = 100; //0.1초마다 1개의 패킷 전송
-  std::string traceFile; //커맨드 라인에서 tracefile(SUMO-tcl) 받아옴 - 파일의 이름
+  uint16_t numberOfNodes = 8; 
+  uint16_t numberOfPed = 5; 
+  uint16_t simTime = 25.1; 
+  double distance = 60.0; 
+  double interPacketInterval = 100; 
+  std::string traceFile; 
   std::string logFile;
 
   // Command line arguments
@@ -168,7 +193,7 @@ main (int argc, char *argv[])
 
 
   // Create the Internet
-  PointToPointHelper p2ph; //pgw-remotehost간 p2p link(그게Internet?) 생성과 attach
+  PointToPointHelper p2ph;
   p2ph.SetDeviceAttribute ("DataRate", DataRateValue (DataRate ("100Gb/s")));
   p2ph.SetDeviceAttribute ("Mtu", UintegerValue (1500));
   p2ph.SetChannelAttribute ("Delay", TimeValue (Seconds (0.010)));
@@ -176,12 +201,12 @@ main (int argc, char *argv[])
 
 
   Ipv4AddressHelper ipv4h;
-  ipv4h.SetBase ("1.0.0.0", "255.0.0.0"); //host addres가  .0.0.0
-  Ipv4InterfaceContainer internetIpIfaces = ipv4h.Assign (internetDevices); //pgwremotehost
+  ipv4h.SetBase ("1.0.0.0", "255.0.0.0");
+  Ipv4InterfaceContainer internetIpIfaces = ipv4h.Assign (internetDevices); 
   // interface 0: pgw addr, interface 1: remote host
-  Ipv4Address remoteHostAddr = internetIpIfaces.GetAddress (1); //pgw (ip: 1.0.0.1)
+  Ipv4Address remoteHostAddr = internetIpIfaces.GetAddress (1); 
   NS_LOG_LOGIC("remote host addr: " << remoteHostAddr);
-  Ipv4Address pgwAddr = internetIpIfaces.GetAddress(0);//remotehost (ip: 1.0.0.2)
+  Ipv4Address pgwAddr = internetIpIfaces.GetAddress(0);
   NS_LOG_LOGIC("PGW addr: " << pgwAddr);
 
 
@@ -224,6 +249,9 @@ main (int argc, char *argv[])
   // Configure callback for logging
   Config::Connect ("/NodeList/*/$ns3::MobilityModel/CourseChange",
                    MakeBoundCallback (&CourseChange, &os));
+
+
+
 
   // Install LTE Devices to the nodes (LTE 통신가능!)
   NetDeviceContainer enbLteDevs = lteHelper->InstallEnbDevice (enbNodes);
@@ -271,7 +299,7 @@ main (int argc, char *argv[])
     pedNodes.Add(pedestrian);
   
   }
-   
+
   
 
 //=======================================application==================================================
@@ -327,10 +355,13 @@ main (int argc, char *argv[])
     ulClient.SetAttribute ("MaxPackets", UintegerValue(1000000)); 
     ulClient.SetAttribute ("PacketSize", UintegerValue(140)); 
 
-    pedclientApps.Add (ulClient.Install (pedNodes.Get(u))); //지금 가져 UE node에 client app설치 UDP app
-    ulClient.SetFill(pedclientApps.Get(u), "Hello World I am Ewha womans univ Student");
-}  
+    pedclientApps.Add (ulClient.Install (pedNodes.Get(u))); //지금 가져온 UE node에 client app설치 UDP app
 
+    for(uint16_t time=0; time<simTime*100; time++){
+       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData, pedNodes.Get(u), ulClient, pedclientApps.Get(u));
+    }
+  
+}  
 
   //vehicle이 초기에 MEC에게 패킷을 보내는 과정이 필요
   //보내지 않으면 MEC쪽에 vehicle UE에 대한 정보가 없어 추후 MEC->Vehicle app 실행에 unknown UE address error occur
@@ -352,7 +383,7 @@ main (int argc, char *argv[])
     vehClient.SetAttribute ("MaxPackets", UintegerValue(1000000)); 
     vehClient.SetAttribute ("PacketSize", UintegerValue(140)); 
 
-    vehclientApps.Add (vehClient.Install (vehNodes.Get(u))); //지금 가져 UE node에 client app설치 UDP app
+    vehclientApps.Add (vehClient.Install (vehNodes.Get(u))); //지금 가져온 UE node에 client app설치 UDP app
 }
 
 
@@ -366,7 +397,7 @@ main (int argc, char *argv[])
     //targetVeh = vehNodes.Get(i); //TODO: works only for 1 eNB !
 
     vehserverApps.Add (udpPacketSinkHelper_veh.Install (vehNodes.Get(i))); //타겟 호스트(엣지 서버)에게 PacketSink install
-    NS_LOG_LOGIC(i<<"번째 자동차에 서버 앱 설치 완료 ");
+    NS_LOG_LOGIC(i<<"번째 자동차에 서버 앱 설치 완료 "); //log for debugging
     
     UdpClientHelper mecClient (InetSocketAddress(ueIpIface.GetAddress (i), udpPort_mec)); 
     
@@ -374,7 +405,7 @@ main (int argc, char *argv[])
     mecClient.SetAttribute ("MaxPackets", UintegerValue(1000000)); 
     mecClient.SetAttribute ("PacketSize", UintegerValue(150)); 
 
-    mecclientApps.Add (mecClient.Install (targetHost)); //지금 가져 UE node에 client app설치 UDP app
+    mecclientApps.Add (mecClient.Install (targetHost)); 
   }
 
   //0~0.99sec: INITIAL STEP - vehicle nodes and pedestrian nodes (UE nodes) send their packet to MEC server
