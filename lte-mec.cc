@@ -29,6 +29,7 @@
 #include <sstream>
 #include <iterator>
 #include <iostream>
+#include <map>
 #include "ns3/lte-helper.h"
 #include "ns3/epc-helper.h"
 #include "ns3/core-module.h"
@@ -50,11 +51,11 @@
 #include "ns3/netanim-module.h"
 #include "ns3/ipv4-nix-vector-helper.h"
 #include "ns3/ipv4-list-routing-helper.h"
-#include "ns3/database.h"
+//#include "ns3/database.h"
 
 using namespace ns3;
 
-
+ //extern void PrintDataBase(void);
 
 // Prints actual position and velocity when a course change event occurs
 static void
@@ -76,6 +77,9 @@ ModifyPacketData (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> a
    
    Ptr<MobilityModel> mymobility=node->GetObject<MobilityModel>();  //get mobility model
 
+   uint32_t ID=node->GetId();
+   std::string nodeID=std::to_string(ID);
+   
    Vector myvelocity = mymobility -> GetVelocity(); //get Velocity vector
    Vector myposition = mymobility -> GetPosition(); //get Position vector
    
@@ -90,6 +94,7 @@ ModifyPacketData (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> a
    velo_y=std::to_string(myvelocity.y);
    
    //Each data element in the packet is separated by "/"
+   sending_data.append(nodeID); sending_data.append("/");
    sending_data.append(pos_x); sending_data.append("/");
    sending_data.append(pos_y); sending_data.append("/");
  
@@ -97,21 +102,36 @@ ModifyPacketData (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> a
   // sending_data.append(std::to_string(myposition.z)); sending_data.append("/"); 
   
    sending_data.append(velo_x); sending_data.append("/");
-   sending_data.append(velo_y); sending_data.append("/");
+   sending_data.append(velo_y); 
 
    udpclient.SetFill(app, sending_data);
 
 }
 
+void
+PrintDataBase ()
+{
 
+//checking mecDb data!
+
+  std::map<int32_t, std::vector<double>>::iterator it;
+  std::cout << "이건 lte-mec코드에서 출력하는"<<std::endl;
+  for(it=mecDb.begin(); it!=mecDb.end(); it++){
+     std::cout << "key: "<< it->first<<std::endl;
+     for(uint32_t i=0; i<4; i++){
+        std::cout <<"value: "<< it->second[i] <<std::endl;
+     }
+     std::cout << "이건 lte-mec코드에서 출력하는"<<std::endl;
+   }
+
+}
 
 
 NS_LOG_COMPONENT_DEFINE ("LteMecExample");
 int
 main (int argc, char *argv[])
 {
-
-   
+  
   LogComponentEnable("EpcEnbApplication", LOG_LEVEL_ALL);
   LogComponentEnable("MecServerApplication", LOG_LEVEL_ALL);
   LogComponentEnable("PointToPointEpcHelper", LOG_LEVEL_ALL);
@@ -137,7 +157,7 @@ main (int argc, char *argv[])
   //그 데이터를 100msec마다 읽어서 차량들에게 전송하는데 사용되는 공간
   //보행자 별 update(report) 타이밍이 다르기 때문에 자료구조에서 탐색하고 재기록하는데 노드 간 순서가 없음
   //따라서 node ID를 기준으로 빠르게 탐색할 수 있는 자료구조가 적합하다고 판단되어 Map 자료구조 사용 
-  std::map <uint16_t, std::vector <double>> db; 
+
   
   
   //이어서 할일 - 지금 extern 헤더파일 사용해서 모든 파일에서 map에 접근 가능
@@ -147,14 +167,9 @@ main (int argc, char *argv[])
   //우선 가장 중요한건 packetsink - write, udpclient - read 구현하는 것!
 
   
-  //db.insert(std::make_pair<uint16_t, std::vector<double>>(1, {1.111, 2.222, 3.333}));
+
   
-  if(db.find(3)!=db.end()){
-  NS_LOG_LOGIC("find!!!찾았음 ");
-  }
-  else{
-  NS_LOG_LOGIC("not find!!!못찾았음 ");
-  }
+
 
   // Command line arguments
   CommandLine cmd;
@@ -258,7 +273,7 @@ main (int argc, char *argv[])
 
   // Install Mobility Model (enb node)
   Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator> ();
-  positionAlloc->Add (Vector(70.0, 180.0, 10));
+  positionAlloc->Add (Vector(70.0, 180.0, 0));
   MobilityHelper enbmobility;
   enbmobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
   enbmobility.SetPositionAllocator(positionAlloc);
@@ -291,7 +306,7 @@ main (int argc, char *argv[])
   NetDeviceContainer enbLteDevs = lteHelper->InstallEnbDevice (enbNodes);
   NetDeviceContainer ueLteDevs = lteHelper->InstallUeDevice (ueNodes);
 
-  p2ph.EnablePcapAll("0304");
+  p2ph.EnablePcapAll("0306sat");
   
   // Install the IP stack on the UEs 
   internet.Install (ueNodes);
@@ -421,6 +436,10 @@ main (int argc, char *argv[])
     vehClient.SetAttribute ("PacketSize", UintegerValue(140)); 
 
     vehclientApps.Add (vehClient.Install (vehNodes.Get(u))); //지금 가져온 UE node에 client app설치 UDP app
+    
+    for(uint16_t time=0; time<100; time++){
+       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData, vehNodes.Get(u), vehClient, vehclientApps.Get(u));
+    }
 }
 
 
@@ -444,20 +463,20 @@ main (int argc, char *argv[])
 
     mecclientApps.Add (mecClient.Install (targetHost)); 
     
-    // for(uint16_t time=10; time<simTime*100; time++){
-    //   Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData, pedNodes.Get(u), ulClient, pedclientApps.Get(u));
-   // }
+     for(uint16_t time=100; time<simTime*100; time++){
+       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData, vehNodes.Get(i), mecClient, mecclientApps.Get(i));
+    }
   }
 
   //0~0.99sec: INITIAL STEP - vehicle nodes and pedestrian nodes (UE nodes) send their packet to MEC server
   //after Initial step - MEC server broadcast to vehicles & vehicle only receive packet not sending 
 
   mecclientApps.Start (Seconds (1.0)); //client only send
-  mecclientApps.Stop (Seconds (simTime)); //client only sent
+  mecclientApps.Stop (Seconds (simTime-0.01)); //client only sent
 
  
   pedclientApps.Start (Seconds (0.01)); //client only send
-  pedclientApps.Stop (Seconds (simTime)); //client only sent
+  pedclientApps.Stop (Seconds (simTime-0.01)); //client only sent
   
   vehclientApps.Start (Seconds (0.01)); //client only send
   vehclientApps.Stop (Seconds (0.99)); //client only sent
@@ -466,6 +485,11 @@ main (int argc, char *argv[])
   serverApps.Start (Seconds (0.01)); //server only receive
 
   lteHelper->EnableTraces ();
+  
+  for(uint16_t i=0; i<=simTime; i++){
+     //Simulator::Schedule(Seconds(i), &PrintDataBase, mecDb);
+     Simulator::Schedule(Seconds(i), &PrintDataBase);
+  }
 
 //================================================application======================================================
   /*
@@ -479,9 +503,12 @@ main (int argc, char *argv[])
   flowMonitor = flowHelper.InstallAll();
 
 
-  Simulator::Stop(Seconds(simTime));
+
+  Simulator::Stop(Seconds(simTime+1));
   
-  AnimationInterface anim("0304anim.xml");
+  
+  
+  AnimationInterface anim("0306anim.xml");
   Simulator::Run();
 
   /*GtkConfigStore config;
