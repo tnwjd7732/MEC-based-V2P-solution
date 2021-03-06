@@ -70,9 +70,9 @@ CourseChange (std::ostream *os, std::string foo, Ptr<const MobilityModel> mobili
       << ", z=" << vel.z << std::endl;
 }
 
-//Modify packet data field (current position, velocity, angle)
+//Modify packet data field - UE(pedestrian, vehicle -> current position, velocity, angle)
 static void
-ModifyPacketData (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> app )
+ModifyPacketData_UE (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> app )
 {
    
    Ptr<MobilityModel> mymobility=node->GetObject<MobilityModel>();  //get mobility model
@@ -108,6 +108,36 @@ ModifyPacketData (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> a
 
 }
 
+//Modify packet data field (MEC server send to vehicle => ALL DATA FROM MEC DB)
+static void
+ModifyPacketData_MEC (UdpClientHelper udpclient, Ptr <Application> app )
+{   
+   std::map<int32_t, std::vector<double>>::iterator it;
+   //Literally, sending_data is the data to be snet in a packet
+   std::string sending_data;
+   
+   std::string nodeID;
+   std::string pos_x, pos_y, velo_x, velo_y;
+   
+   
+   for(it=mecDb.begin(); it!=mecDb.end(); it++){
+      nodeID=std::to_string(it->first);
+      pos_x=std::to_string(it->second[0]);
+      pos_y=std::to_string(it->second[1]);
+      velo_x=std::to_string(it->second[2]);
+      velo_y=std::to_string(it->second[3]);   
+      
+      //Each data element in the packet is separated by "/"
+      sending_data.append(nodeID); sending_data.append("/");
+      sending_data.append(pos_x); sending_data.append("/");
+      sending_data.append(pos_y); sending_data.append("/");
+      sending_data.append(velo_x); sending_data.append("/");
+      sending_data.append(velo_y); sending_data.append("/");
+   }
+    
+   udpclient.SetFill(app, sending_data);
+}
+
 void
 PrintDataBase ()
 {
@@ -115,14 +145,41 @@ PrintDataBase ()
 //checking mecDb data!
 
   std::map<int32_t, std::vector<double>>::iterator it;
-  std::cout << "이건 lte-mec코드에서 출력하는"<<std::endl;
+  std::cout << "Start MEC Database print at "<< Simulator::Now()<<std::endl;
   for(it=mecDb.begin(); it!=mecDb.end(); it++){
      std::cout << "key: "<< it->first<<std::endl;
-     for(uint32_t i=0; i<4; i++){
+     for(uint32_t i=0; i<5; i++){
         std::cout <<"value: "<< it->second[i] <<std::endl;
      }
-     std::cout << "이건 lte-mec코드에서 출력하는"<<std::endl;
    }
+   std::cout << "Finish MEC Database print at "<< Simulator::Now()<<std::endl;
+
+}
+
+//이 함수는 100mesec마다 호출되어서 MEC database에 저장된 데이터 중 시스템에 참여하지 않는 보행자의 데이터를 제거
+//(100msec 너무 긴시간인가? 서버니까 더 자주 체크해도 될까?)
+//임계값은 실험 코드 초안 작성 후, 보행자 report 주기로 계산될 수 있는 최대값으로 변경 예정 
+void
+CheckLastModifiedTime () 
+{
+  std::map<int32_t, std::vector<double>>::iterator it;
+  for(it=mecDb.begin(); it!=mecDb.end(); it++){
+     
+     double lastUpdateTime = (Simulator::Now ().GetSeconds ())-(it->second[4]); //마지막 업데이트 시간
+     
+     double threshold = 2.0;
+     //마지막 업데이트로부터 지금까지 임계값(default=2.0 sec)이상 지났으면
+     //보행자가 이 시스템에 참여하지 않는 상태로 간주하고 map에서 해당 보행자 데이터 제거 
+     if (lastUpdateTime>threshold){ 
+        mecDb.erase(it->first);
+        std::cout<<it->first<<"번 노드의 데이터가 "<<threshold<<"sec동안 업데이트 되지 않았습니다."<<std::endl;
+        std::cout<<"따라서"<<it->first<<"번 노드의 데이터를 MEC Database에서 제거합니다."<<std::endl;
+     }
+  }
+
+
+
+
 
 }
 
@@ -410,7 +467,7 @@ main (int argc, char *argv[])
     //변화하는 position과 velocity를 100msec마다 가져와 전송 데이터로 대기시킴 
     //report주기와는 별개로, 0.1초마다 갱신해두면 report주기에 맞게 저장되어 있는 (setfill된) 데이터를 전송
     for(uint16_t time=0; time<simTime*100; time++){
-       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData, pedNodes.Get(u), ulClient, pedclientApps.Get(u));
+       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData_UE, pedNodes.Get(u), ulClient, pedclientApps.Get(u));
     }
   
 }  
@@ -432,13 +489,13 @@ main (int argc, char *argv[])
     NS_LOG_LOGIC("targetHostAddr = " << targetAddr);
     UdpClientHelper vehClient (InetSocketAddress(targetAddr, udpPort_veh)); 
     vehClient.SetAttribute ("Interval", TimeValue (MilliSeconds(interPacketInterval))); //100msec마다 패킷 전송
-    vehClient.SetAttribute ("MaxPackets", UintegerValue(1000000)); 
+    vehClient.SetAttribute ("MaxPackets", UintegerValue(3)); //시뮬레이션 시작하고 3번만 보냄->300msec(자기 위치 알리는 용이라서)
     vehClient.SetAttribute ("PacketSize", UintegerValue(140)); 
 
     vehclientApps.Add (vehClient.Install (vehNodes.Get(u))); //지금 가져온 UE node에 client app설치 UDP app
     
     for(uint16_t time=0; time<100; time++){
-       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData, vehNodes.Get(u), vehClient, vehclientApps.Get(u));
+       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData_UE, vehNodes.Get(u), vehClient, vehclientApps.Get(u));
     }
 }
 
@@ -464,7 +521,7 @@ main (int argc, char *argv[])
     mecclientApps.Add (mecClient.Install (targetHost)); 
     
      for(uint16_t time=100; time<simTime*100; time++){
-       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData, vehNodes.Get(i), mecClient, mecclientApps.Get(i));
+       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData_MEC, mecClient, mecclientApps.Get(i));
     }
   }
 
@@ -486,10 +543,17 @@ main (int argc, char *argv[])
 
   lteHelper->EnableTraces ();
   
-  for(uint16_t i=0; i<=simTime; i++){
-     //Simulator::Schedule(Seconds(i), &PrintDataBase, mecDb);
-     Simulator::Schedule(Seconds(i), &PrintDataBase);
+  for(uint16_t i=0; i<=simTime*10; i++){
+     //0.1초마다 현재 MEC DB저장된 보행자 목록 출
+     Simulator::Schedule(Seconds(i*0.1), &PrintDataBase);
   }
+  
+  for(uint16_t i=0; i<=simTime*100; i++){
+     //100msec마다 MEC DB에 저장된 보행자 목록 중 만료된 보행자를 찾아 삭제
+     Simulator::Schedule(Seconds(i*0.01), &CheckLastModifiedTime);
+  }
+  
+
 
 //================================================application======================================================
   /*
