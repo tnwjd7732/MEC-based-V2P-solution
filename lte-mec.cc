@@ -30,6 +30,8 @@
 #include <iterator>
 #include <iostream>
 #include <map>
+#include <cmath>
+
 #include "ns3/lte-helper.h"
 #include "ns3/epc-helper.h"
 #include "ns3/core-module.h"
@@ -51,16 +53,28 @@
 #include "ns3/netanim-module.h"
 #include "ns3/ipv4-nix-vector-helper.h"
 #include "ns3/ipv4-list-routing-helper.h"
-//#include "ns3/database.h"
+
+#include "ns3/basic-energy-source.h"
+#include "ns3/simple-device-energy-model.h"
+#include "ns3/li-ion-energy-source.h"
+#include "ns3/energy-source-container.h"
+#include "ns3/energy-model-helper.h"
+#include "ns3/energy-source.h"
+#include "ns3/li-ion-energy-source-helper.h"
+
 
 using namespace ns3;
 
- //extern void PrintDataBase(void);
 
+std::vector <int16_t> stdMeter;
+std::vector <int16_t> stopFlag;
+  
+  
 // Prints actual position and velocity when a course change event occurs
 static void
 CourseChange (std::ostream *os, std::string foo, Ptr<const MobilityModel> mobility)
 {
+
   Vector pos = mobility->GetPosition (); // Get position
   Vector vel = mobility->GetVelocity (); // Get velocity
 
@@ -68,9 +82,12 @@ CourseChange (std::ostream *os, std::string foo, Ptr<const MobilityModel> mobili
   *os << Simulator::Now () << " POS: x=" << pos.x << ", y=" << pos.y
       << ", z=" << pos.z << "; VEL:" << vel.x << ", y=" << vel.y
       << ", z=" << vel.z << std::endl;
+      
 }
 
 //Modify packet data field - UE(pedestrian, vehicle -> current position, velocity, angle)
+//This function is similar to GPS receiving
+//called every 100msec
 static void
 ModifyPacketData_UE (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> app )
 {
@@ -95,12 +112,10 @@ ModifyPacketData_UE (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application
    
    //Each data element in the packet is separated by "/"
    sending_data.append(nodeID); sending_data.append("/");
+   
    sending_data.append(pos_x); sending_data.append("/");
    sending_data.append(pos_y); sending_data.append("/");
  
-  // We don't use position_z in Collision Prediction Algorithm
-  // sending_data.append(std::to_string(myposition.z)); sending_data.append("/"); 
-  
    sending_data.append(velo_x); sending_data.append("/");
    sending_data.append(velo_y); 
 
@@ -108,21 +123,23 @@ ModifyPacketData_UE (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application
 
 }
 
+
 //Modify packet data field (MEC server send to vehicle => ALL DATA FROM MEC DB)
+//Get latest DB data
 static void
 ModifyPacketData_MEC (UdpClientHelper udpclient, Ptr <Application> app )
 {   
    std::map<int32_t, std::vector<double>>::iterator it;
-   //Literally, sending_data is the data to be snet in a packet
+   //Literally, sending_data is the data to be sent in a packet
    std::string sending_data;
    
    std::string nodeID;
    std::string pos_x, pos_y, velo_x, velo_y;
    
-   
+   //get all pedestrian data stored in MEC DB
    for(it=mecDb.begin(); it!=mecDb.end(); it++){
       nodeID=std::to_string(it->first);
-      pos_x=std::to_string(it->second[0]);
+      pos_x=std::to_string(it->second[0]); 
       pos_y=std::to_string(it->second[1]);
       velo_x=std::to_string(it->second[2]);
       velo_y=std::to_string(it->second[3]);   
@@ -142,8 +159,7 @@ void
 PrintDataBase ()
 {
 
-//checking mecDb data!
-
+//checking mecDb data
   std::map<int32_t, std::vector<double>>::iterator it;
   std::cout << "Start MEC Database print at "<< Simulator::Now()<<std::endl;
   for(it=mecDb.begin(); it!=mecDb.end(); it++){
@@ -156,8 +172,11 @@ PrintDataBase ()
 
 }
 
+/* --> 실험에선 보행자측에서 속도 확인하면서 멈추거나 느리면 자체적으로 자신의 데이터를 DB에서 지움
+/* --> 그러나 실제에서는 MEC server의 데이터를 보행자가 지울 수 없으므로 아래와 같은 기능이 필요할 
+
+
 //이 함수는 100mesec마다 호출되어서 MEC database에 저장된 데이터 중 시스템에 참여하지 않는 보행자의 데이터를 제거
-//(100msec 너무 긴시간인가? 서버니까 더 자주 체크해도 될까?)
 //임계값은 실험 코드 초안 작성 후, 보행자 report 주기로 계산될 수 있는 최대값으로 변경 예정 
 void
 CheckLastModifiedTime () 
@@ -167,7 +186,7 @@ CheckLastModifiedTime ()
      
      double lastUpdateTime = (Simulator::Now ().GetSeconds ())-(it->second[4]); //마지막 업데이트 시간
      
-     double threshold = 2.0;
+     double threshold = 5.0;
      //마지막 업데이트로부터 지금까지 임계값(default=2.0 sec)이상 지났으면
      //보행자가 이 시스템에 참여하지 않는 상태로 간주하고 map에서 해당 보행자 데이터 제거 
      if (lastUpdateTime>threshold){ 
@@ -177,14 +196,207 @@ CheckLastModifiedTime ()
      }
   }
 
+}
+*/
+
+//Print Remaining Energy of UE (every 1sec 너무 짧은 듯) 
+static void
+PrintCellInfo (Ptr<EnergySource> es)
+{
+  std::cout << "At " << Simulator::Now ().GetSeconds () << "sec Cell voltage: " << es->GetSupplyVoltage () << " V Remaining Capacity: " <<
+  es->GetRemainingEnergy () / (3.6 * 3600) << " Ah " << es->GetNode ()->GetId() << " node ID" <<std::endl;
+  Ptr<LiIonEnergySource> bat = es->GetNode ()->GetObject<LiIonEnergySource> ();
+  NS_LOG_UNCOND (bat->GetRemainingEnergy ());
+
+  if (!Simulator::IsFinished ())
+    {
+      Simulator::Schedule (Seconds (1),
+                           &PrintCellInfo,
+                           es);
+    }
+}
+
+//Step 1. 보행자의 상태 확인 후 보행 중이면 알고리즘 진입
+//Step 2. 보행자의 mobility model가져와서 속도 구하기 (1m/s)
+//Step 3. 속도, 현재 보행 상태, 위치(PDZ or NPDZ)를 바탕으로 다음 전송 타이밍 계산
+//Step 4. 계산된 시간을 노드의 interval로 설정 (지금부터 interval뒤 패킷 전송 됨)
+//Step 5. 계산된 시간 뒤 다시 MyAlgorithm을 호출(한번 전송 후 다시 현재 속도를 확인하고 타이밍 계산)
+
+static void
+MyAlgorithm (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> app , uint32_t vehNum)
+{
+  uint32_t nodeID = node->GetId();
+  double next, speed;
+  if(stopFlag.at(nodeID - vehNum - 3)==0){ }
+  else{
+
+  
+  Ptr<MobilityModel> mymobility=node->GetObject<MobilityModel>();  //get mobility model
+  
+  Vector myvelocity = mymobility -> GetVelocity(); //get Velocity vector
+
+  next = sqrt((myvelocity.x) * (myvelocity.x) + (myvelocity.y) * (myvelocity.y)); //scalar data (not vector data)
+  
+  
+  //PDZ이면 stdMeter에 담긴 값이 1, NPDZ이면 stdMeter에 담긴 값이 3
+  //보행자가 정지, 건물 내, 차량 탑승과 같은 상태이면 stopFlag에 0이 있어 report중지
+  //보행자가 정상 보행(위의 상황이 아니라면) stopFlag에 1이 있어 구한 타이밍대로 report
+  next = next * stdMeter.at(nodeID - vehNum - 3) * stopFlag.at(nodeID - vehNum - 3); 
+  
+  
+  //for debugging
+  std::cout<<"================MY ALGORITHM================"<<std::endl;
+  std::cout<<nodeID<<"번 노드의 speed: "<<next<<" 기준 거리는 "
+  <<stdMeter.at(nodeID - vehNum - 3) <<"이고 stop flag는"<<stopFlag.at(nodeID - vehNum - 3)<<std::endl;
+  std::cout<<"next ="<<next<<" Time: "<<Simulator::Now().GetSeconds()<<std::endl;
+
+  //schedule & set interval
+  Simulator::Schedule(Time(Seconds(next)), &MyAlgorithm, node, udpclient, app, vehNum);
+  udpclient.SetInterval(app, Time(Seconds(next)));
+
+  std::cout<<nodeID<<"번 노드 알고리즘 수행 완료! 새로운 주기: "<<Time(Seconds(next))<<std::endl;
+  std::cout<<"알고리즘은 "<<Time(Seconds(next))<<"sec후에 다시 수행됩니다!"<<std::endl;
+
+}
+}
 
 
+//Check if node is in PDZ or not
+static bool
+IsPDZ(Vector position)
+{
+  double x=position.x;
+  double y=position.y;
+  uint32_t check=0;
+  
+  if((x<=20) || ((x>=87.4) && (x<=117.4)) || (x>=184.8)){
+    check++;
+  }
+  if((y<=-70) || ((y>=-15) && (y<=15)) || (y>=70)){
+    check++;
+  }
+  if(check==2){
+    return true; //PDZ
+  }
+  else{
+    return false; //NPDZ
+  }
 
+}
 
+//Determining each pedestrian's stdMeter (whether PDZ or NPDZ)
+//called every 100msec
+static void
+CheckPedPosition (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> app, uint32_t vehNum )
+{
+   Ptr<MobilityModel> mymobility=node->GetObject<MobilityModel>();  //get mobility model
+   
+   Vector myposition = mymobility -> GetPosition(); //get Position vector
+   
+   std::string pos_x, pos_y;
+   uint32_t nodeID = node->GetId();
+   
+   if (IsPDZ(myposition)){
+     //PDZ - 기준거리 1m
+     std::cout<<"보행자 "<<nodeID<<"는 PDZ에 위치합니다."<<std::endl;
+     
+     if( stdMeter[nodeID - vehNum - 3]==3){ //NPDZ에서 PDZ 진입
+      stdMeter[nodeID - vehNum - 3] = 1;
+      
+      //critical situation
+      udpclient.SetInterval(app, Time(Seconds(0.01))); //당장 보낼 수 있도록 interval 설정
+      Simulator::ScheduleNow(&MyAlgorithm, node, udpclient, app, vehNum); //일단 몇번 보내놓고 제대로 된 알고리즘 구하러 보내기
+
+     }
+     stdMeter[nodeID - vehNum - 3] = 1;
+
+   }
+   else{
+     //NPDZ - 기준거리 Nm(N=2,3,5,10 ...) default=3
+     std::cout<<"보행자 "<<nodeID<<"는 NPDZ에 위치합니다."<<std::endl;
+
+     if(stdMeter[nodeID - vehNum - 3]==1){ //PDZ에서 NPDZ진입  - not critical situation
+       stdMeter[nodeID - vehNum - 3] = 3;
+     
+     }
+       stdMeter[nodeID - vehNum - 3] = 3;
+   }
+   
+}
+
+//Check pedestrian velocity(speed) and change stopFlag
+//Called every 100msec
+static void
+CheckPedVelocity (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> app, uint32_t vehNum )
+{
+  
+  Ptr<MobilityModel> mymobility=node->GetObject<MobilityModel>();  //get mobility model
+   
+  Vector myvelocity = mymobility -> GetVelocity(); //get Velocity vector
+  
+  uint32_t nodeID = node->GetId();
+  double speed;
+  speed = sqrt((myvelocity.x) * (myvelocity.x) + (myvelocity.y) * (myvelocity.y)); //scalar data (not vector)
+  std::cout<<" 현재 interval"<<udpclient.GetInterval(app)<<std::endl; 
+  
+  
+  if ((speed==0) && (Simulator::Now().GetSeconds()<1.0)){ //speed가 0인 초반 1
+
+    udpclient.SetInterval(app, Time(Seconds(0.1)));
+    MyAlgorithm(node, udpclient, app, vehNum);
+  }
+  else if ((speed < 0.1) &&(stopFlag[nodeID - vehNum -3] = 1) ){ //속도가 기준 미만으로 떨어진 순간 
+    //probably stop or indoor
+    stopFlag[nodeID - vehNum -3] = 0;
+    std::cout<<"Stop reporting ... nodeID: "<<nodeID<<" speed: "<<speed<<"status: stop or indoor"<<std::endl;
+    std::cout<<"보행자가 움직이지 않습니다. "<<nodeID<<"번 노드의 데이터를 MEC Database에서 제거합니다."<<std::endl;
+    //send멈추고 db에서 erase
+    mecDb.erase(nodeID);
+
+    udpclient.SetInterval(app, Time(Seconds(0.0))); //set interval 0 (stop application)
+
+  }
+  
+  else if(speed<0.1){ //계속해서 알고리즘 참여안하는 상황 
+      std::cout<<"Not sending ... nodeID: "<<nodeID<<" speed: "<<speed<<"status: stop or indoor"<<std::endl;
+  }
+  else if (speed > 4){ //속도가 기준 이상인 상황 (차량) 
+    //probably in Vehicle
+    stopFlag[nodeID - vehNum - 3] = 0;
+    std::cout<<"Stop reporting ... nodeID: "<<nodeID<<" speed: "<<speed<<"status: in Vehicle"<<std::endl;
+  }
+  
+  //속도가 정상 범위 내인데 현재 stopFlag가 0인 상황 + interval이 0인 상황(한번 멈춰진 상황에서 복귀하는 상황) 
+  else if( (stopFlag[nodeID - vehNum - 3] == 0) && (udpclient.GetInterval(app)==0)){ 
+    stopFlag[nodeID - vehNum -3] = 1;
+    std::cout<<"Start reporting (복귀) ... nodeID: "<<nodeID<<" speed: "<<speed<<"status: Walk"<<std::endl;
+
+    udpclient.SetInterval(app, Time(Seconds(0.001))); //당장 보내기, 그러고 나서 알고리즘으로 올바른 시점 계산 및 적 
+    udpclient.StartAgain(app);
+    MyAlgorithm(node, udpclient, app, vehNum);
+    
+  } 
+  
+  //속도가 정상 범위 내인데 현재 stopFlag가 0인 상황 + interval!=0이므로 첫 1초 바로 직후
+  else if( stopFlag[nodeID - vehNum - 3] == 0 ){ 
+
+    stopFlag[nodeID - vehNum -3] = 1;
+    std::cout<<"Start(First time) reporting ... nodeID: "<<nodeID<<" speed: "<<speed<<"status: Walk"<<std::endl;
+    MyAlgorithm(node, udpclient, app, vehNum);
+
+    
+  }   
+  else {
+    //stopFlag[nodeID - vehNum -3] = 1; //이전 flag도 1이고 속도도 정상 범위인 상황 -> 계속 보행 중 
+    stopFlag[nodeID - vehNum -3] = 1;
+    std::cout<<"Continuing reporting ... nodeID: "<<nodeID<<" speed: "<<speed<<"status: Walk"<<std::endl;
+  }
 }
 
 
 NS_LOG_COMPONENT_DEFINE ("LteMecExample");
+
+
 int
 main (int argc, char *argv[])
 {
@@ -200,32 +412,28 @@ main (int argc, char *argv[])
     NS_LOG_LOGIC("argv["<<i<<"] = " << argv[i]);
   }
 
-
+  uint16_t numberOfPed = 5;
   uint16_t numberOfNodes = 8; 
-  uint16_t numberOfPed = 5; 
+  uint16_t numberOfVeh = 3;  
   uint16_t simTime = 25.1; 
   double distance = 60.0; 
   double interPacketInterval = 100; 
   std::string traceFile; 
   std::string logFile;
+
+  stdMeter.assign(numberOfPed, 1);
+  stopFlag.assign(numberOfPed, 0);
   
+  
+  
+  //MEC server Database는 Map<uint32_t, std::vector<double>> 사용 
   
   //MEC서버가 보행자에게 받은 데이터를 기록, 업데이트하고 
   //그 데이터를 100msec마다 읽어서 차량들에게 전송하는데 사용되는 공간
   //보행자 별 update(report) 타이밍이 다르기 때문에 자료구조에서 탐색하고 재기록하는데 노드 간 순서가 없음
   //따라서 node ID를 기준으로 빠르게 탐색할 수 있는 자료구조가 적합하다고 판단되어 Map 자료구조 사용 
+  //extern 헤더파일 사용해서 헤더파일 추가한 모든 파일에서 map(MEC DB)에 접근 가능
 
-  
-  
-  //이어서 할일 - 지금 extern 헤더파일 사용해서 모든 파일에서 map에 접근 가능
-  //이젠 진짜 map 접근해서 packetsink에서는 받아온거 기록(있는지 확인하고 있으면 erase, insert)하도록 코드 추가
-  //그리고 그걸 MEC udp client app은 데이터 읽어와서 string하나로 만들어 보내기 구현
-  //받은 데이터로 veh에서 데이터 추출하고 알고리즘 돌리는건 추후에
-  //우선 가장 중요한건 packetsink - write, udpclient - read 구현하는 것!
-
-  
-
-  
 
 
   // Command line arguments
@@ -233,6 +441,7 @@ main (int argc, char *argv[])
   cmd.AddValue("traceFile", "Ns2 movement trace file", traceFile);
   cmd.AddValue("numberOfNodes", "Number of UE nodes", numberOfNodes);
   cmd.AddValue("numberOfPed", "Number of Pedestrian nodes", numberOfPed);
+  cmd.AddValue("numberOfVeh", "Number of Pedestrian nodes", numberOfVeh);
   cmd.AddValue("simTime", "Total duration of the simulation [s])", simTime);
   cmd.AddValue ("logFile", "Log file", logFile);
   cmd.AddValue("distance", "Distance between eNBs [m]", distance);
@@ -244,7 +453,7 @@ main (int argc, char *argv[])
   cmd.Parse (argc,argv);
 
   // Check command line arguments
-  if (traceFile.empty () || numberOfNodes <= 0 || numberOfPed <= 0|| simTime <= 0 || logFile.empty ())
+  if (traceFile.empty () || numberOfNodes <= 0 || numberOfPed <= 0|| numberOfVeh <= 0|| simTime <= 0 || logFile.empty ())
     {
       std::cout << "Usage of " << argv[0] << " :\n\n"
       "./waf --run \"ns2-mobility-trace"
@@ -262,7 +471,8 @@ main (int argc, char *argv[])
 // open log file for output
   std::ofstream os;
   os.open (logFile.c_str ());
-  //ltehelper, epc로 LTE 기본환경 셋
+
+  //ltehelper, epc로 LTE 기본환경 set
   Ptr<LteHelper> lteHelper = CreateObject<LteHelper> ();
   Ptr<PointToPointEpcHelper>  epcHelper = CreateObject<PointToPointEpcHelper> (); 
   lteHelper->SetEpcHelper (epcHelper);
@@ -336,17 +546,6 @@ main (int argc, char *argv[])
   enbmobility.SetPositionAllocator(positionAlloc);
   enbmobility.Install(enbNodes);
 
-/*
-  // Install Mobility Model (UE node) -> replace SUMO tracefile
-  Ptr<ListPositionAllocator> uePositionAlloc = CreateObject<ListPositionAllocator> ();
-  for (uint16_t i = 0; i<numberOfNodes; i++) {
-    uePositionAlloc->Add (Vector (1.0+10*i, 170.0, 1.5));
-  }
-  MobilityHelper uemobility;
-  uemobility.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
-  uemobility.SetPositionAllocator(uePositionAlloc);
-  uemobility.Install(ueNodes);
-*/
 
  // Create Ns2MobilityHelper with the specified trace log file as parameter
   Ns2MobilityHelper ns2 = Ns2MobilityHelper (traceFile);
@@ -359,11 +558,11 @@ main (int argc, char *argv[])
 
 
 
-  // Install LTE Devices to the nodes (LTE 통신가능!)
+  // Install LTE Devices to the nodes 
   NetDeviceContainer enbLteDevs = lteHelper->InstallEnbDevice (enbNodes);
   NetDeviceContainer ueLteDevs = lteHelper->InstallUeDevice (ueNodes);
 
-  p2ph.EnablePcapAll("0306sat");
+  p2ph.EnablePcapAll("0309tue"); 
   
   // Install the IP stack on the UEs 
   internet.Install (ueNodes);
@@ -391,8 +590,8 @@ main (int argc, char *argv[])
   }
   
   
-  //보행자와 차량 그룹으로 분류 
-  NodeContainer pedNodes; //pedestrian과 vehicle모두 UE이지만, 다른 application을 설치하고 다르게 관리하기 위해서 두개의 node container로 구
+  //UE를 보행자와 차량 그룹으로 분류 
+  NodeContainer pedNodes; 
   NodeContainer vehNodes;
   
   for(int u=0; u< numberOfNodes - numberOfPed; u++) {
@@ -420,7 +619,7 @@ main (int argc, char *argv[])
   ApplicationContainer mecclientApps; //Vehicle에게 보내는 MEC app
   ApplicationContainer serverApps; //pedestrian에게 받는 MEC app
   ApplicationContainer vehserverApps; //MEC에게 받는 vehicle app
-  ApplicationContainer vehclientApps; //통신 초기 등록을 위해 한번만 보내는 app
+  ApplicationContainer vehclientApps; //통신 초기 등록을 위해 몇번만 보내는 vehicle app
 
   bool useMecOnEnb = true; //true --> MEC on eNB 
   bool useMecOnPgw = false;//true --> MEC on PGW (if not on eNB) 
@@ -456,18 +655,21 @@ main (int argc, char *argv[])
 
     NS_LOG_LOGIC("targetHostAddr = " << targetAddr);
     UdpClientHelper ulClient (InetSocketAddress(targetAddr, udpPort)); 
-    ulClient.SetAttribute ("Interval", TimeValue (MilliSeconds(interPacketInterval))); //100msec마다 패킷 전송
-    // 이 부분을 My Algorithm을 추가해서 interPacketInterval을 구하도록 해야함!! 동적으로 변화하는 report timing
+    ulClient.SetAttribute ("Interval", TimeValue (MilliSeconds(100)));
     ulClient.SetAttribute ("MaxPackets", UintegerValue(1000000)); 
     ulClient.SetAttribute ("PacketSize", UintegerValue(140)); 
+    
+    pedclientApps.Add (ulClient.Install (pedNodes.Get(u))); 
 
-    pedclientApps.Add (ulClient.Install (pedNodes.Get(u))); //지금 가져온 UE node에 client app설치 UDP app
+
 
     //보행자 휴대폰은 100msec마다 GPS를 수신한다는 가정
     //변화하는 position과 velocity를 100msec마다 가져와 전송 데이터로 대기시킴 
     //report주기와는 별개로, 0.1초마다 갱신해두면 report주기에 맞게 저장되어 있는 (setfill된) 데이터를 전송
-    for(uint16_t time=0; time<simTime*100; time++){
-       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData_UE, pedNodes.Get(u), ulClient, pedclientApps.Get(u));
+    for(uint16_t time=1; time<simTime*10; time++){
+       Simulator::Schedule(Seconds(time*0.1), &ModifyPacketData_UE, pedNodes.Get(u), ulClient, pedclientApps.Get(u));
+       Simulator::Schedule(Seconds(time*0.1), &CheckPedPosition, pedNodes.Get(u), ulClient, pedclientApps.Get(u), numberOfVeh);
+       Simulator::Schedule(Seconds(time*0.1), &CheckPedVelocity, pedNodes.Get(u), ulClient, pedclientApps.Get(u), numberOfVeh);
     }
   
 }  
@@ -492,10 +694,10 @@ main (int argc, char *argv[])
     vehClient.SetAttribute ("MaxPackets", UintegerValue(3)); //시뮬레이션 시작하고 3번만 보냄->300msec(자기 위치 알리는 용이라서)
     vehClient.SetAttribute ("PacketSize", UintegerValue(140)); 
 
-    vehclientApps.Add (vehClient.Install (vehNodes.Get(u))); //지금 가져온 UE node에 client app설치 UDP app
+    vehclientApps.Add (vehClient.Install (vehNodes.Get(u))); 
     
-    for(uint16_t time=0; time<100; time++){
-       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData_UE, vehNodes.Get(u), vehClient, vehclientApps.Get(u));
+    for(uint16_t time=1; time<10; time++){
+       Simulator::Schedule(Seconds(time*0.1), &ModifyPacketData_UE, vehNodes.Get(u), vehClient, vehclientApps.Get(u));
     }
 }
 
@@ -506,8 +708,6 @@ main (int argc, char *argv[])
     //MEC Client app - 엣지 서버가 차량들에게 broadcast하는 application
     ++udpPort_mec;
     PacketSinkHelper udpPacketSinkHelper_veh ("ns3::UdpSocketFactory", InetSocketAddress (Ipv4Address::GetAny (), udpPort_mec));
-    //Ptr<Node> targetVeh;
-    //targetVeh = vehNodes.Get(i); //TODO: works only for 1 eNB !
 
     vehserverApps.Add (udpPacketSinkHelper_veh.Install (vehNodes.Get(i))); //타겟 호스트(엣지 서버)에게 PacketSink install
     NS_LOG_LOGIC(i<<"번째 자동차에 서버 앱 설치 완료 "); //log for debugging
@@ -520,40 +720,54 @@ main (int argc, char *argv[])
 
     mecclientApps.Add (mecClient.Install (targetHost)); 
     
-     for(uint16_t time=100; time<simTime*100; time++){
-       Simulator::Schedule(Seconds(time*0.01), &ModifyPacketData_MEC, mecClient, mecclientApps.Get(i));
+     for(uint16_t time=0; time<simTime*10; time++){
+       Simulator::Schedule(Seconds(time*0.1), &ModifyPacketData_MEC, mecClient, mecclientApps.Get(i));
     }
   }
 
-  //0~0.99sec: INITIAL STEP - vehicle nodes and pedestrian nodes (UE nodes) send their packet to MEC server
-  //after Initial step - MEC server broadcast to vehicles & vehicle only receive packet not sending 
 
   mecclientApps.Start (Seconds (1.0)); //client only send
-  mecclientApps.Stop (Seconds (simTime-0.01)); //client only sent
+  mecclientApps.Stop (Seconds (simTime)); //client only sent
 
  
-  pedclientApps.Start (Seconds (0.01)); //client only send
-  pedclientApps.Stop (Seconds (simTime-0.01)); //client only sent
+  pedclientApps.Start (Seconds (0.1)); //ped client only send
+  pedclientApps.Stop (Seconds (simTime)); //ped client only sent
   
-  vehclientApps.Start (Seconds (0.01)); //client only send
-  vehclientApps.Stop (Seconds (0.99)); //client only sent
+  vehclientApps.Start (Seconds (0.1)); //veh client only send
+  vehclientApps.Stop (Seconds (0.99)); //veh client only sent
   
-  vehserverApps.Start (Seconds (0.01)); //server only receive
-  serverApps.Start (Seconds (0.01)); //server only receive
+  vehserverApps.Start (Seconds (0.00)); //veh server only receive
+  serverApps.Start (Seconds (0.00)); //mec server only receive
 
   lteHelper->EnableTraces ();
   
+ 
+  
   for(uint16_t i=0; i<=simTime*10; i++){
-     //0.1초마다 현재 MEC DB저장된 보행자 목록 출
+     //0.1초마다 현재 MEC DB저장된 보행자 목록 출력  
      Simulator::Schedule(Seconds(i*0.1), &PrintDataBase);
   }
-  
+  /*
   for(uint16_t i=0; i<=simTime*100; i++){
      //100msec마다 MEC DB에 저장된 보행자 목록 중 만료된 보행자를 찾아 삭제
-     Simulator::Schedule(Seconds(i*0.01), &CheckLastModifiedTime);
-  }
-  
+     Simulator::Schedule(Seconds(i*0.1), &CheckLastModifiedTime);
+  }*/
+ 
 
+   //배터리 기능 UE에 설치
+  Ptr<EnergySourceContainer> esCont = CreateObject<EnergySourceContainer> ();
+  for (uint16_t i = 0; i < numberOfPed; i++)
+      {
+        Ptr<SimpleDeviceEnergyModel> sem = CreateObject<SimpleDeviceEnergyModel> ();
+        Ptr<LiIonEnergySource> es = CreateObject<LiIonEnergySource> ();
+        esCont->Add (es);
+        es->SetNode (pedNodes.Get(i));
+        sem->SetEnergySource (es);
+        es->AppendDeviceEnergyModel (sem);
+        sem->SetNode (pedNodes.Get(i));
+        pedNodes.Get(i)->AggregateObject (es);
+        PrintCellInfo (esCont->Get(i));
+     }
 
 //================================================application======================================================
   /*
@@ -568,11 +782,11 @@ main (int argc, char *argv[])
 
 
 
-  Simulator::Stop(Seconds(simTime+1));
+  Simulator::Stop(Seconds(simTime));
   
   
   
-  AnimationInterface anim("0306anim.xml");
+  AnimationInterface anim("0309.xml");
   Simulator::Run();
 
   /*GtkConfigStore config;
