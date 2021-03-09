@@ -85,6 +85,25 @@ CourseChange (std::ostream *os, std::string foo, Ptr<const MobilityModel> mobili
       
 }
 
+static double
+CalculateAngle(Vector myposition)
+{
+  double angle;
+  const double RadtoDeg = 57.2957951; //180/pi
+  
+  if(myposition.y==0 && myposition.x==0){ //velocity=0
+    angle=0;
+    }
+  
+  else{
+    angle = atan2(myposition.y, myposition.x) * RadtoDeg; //degree
+    }
+    
+    
+  return angle;
+
+}
+
 //Modify packet data field - UE(pedestrian, vehicle -> current position, velocity, angle)
 //This function is similar to GPS receiving
 //called every 100msec
@@ -100,15 +119,19 @@ ModifyPacketData_UE (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application
    Vector myvelocity = mymobility -> GetVelocity(); //get Velocity vector
    Vector myposition = mymobility -> GetPosition(); //get Position vector
    
+   double angle = CalculateAngle(myposition);
    
    //Literally, sending_data is the data to be snet in a packet
    std::string sending_data; 
    std::string pos_x, pos_y, velo_x, velo_y;
+   std::string angle_str;
    
    pos_x=std::to_string(myposition.x);
    pos_y=std::to_string(myposition.y);
    velo_x=std::to_string(myvelocity.x);
    velo_y=std::to_string(myvelocity.y);
+   angle_str=std::to_string(angle);
+   
    
    //Each data element in the packet is separated by "/"
    sending_data.append(nodeID); sending_data.append("/");
@@ -117,7 +140,8 @@ ModifyPacketData_UE (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application
    sending_data.append(pos_y); sending_data.append("/");
  
    sending_data.append(velo_x); sending_data.append("/");
-   sending_data.append(velo_y); 
+   sending_data.append(velo_y); sending_data.append("/");
+   sending_data.append(angle_str);
 
    udpclient.SetFill(app, sending_data);
 
@@ -134,7 +158,7 @@ ModifyPacketData_MEC (UdpClientHelper udpclient, Ptr <Application> app )
    std::string sending_data;
    
    std::string nodeID;
-   std::string pos_x, pos_y, velo_x, velo_y;
+   std::string pos_x, pos_y, velo_x, velo_y, angle_str;
    
    //get all pedestrian data stored in MEC DB
    for(it=mecDb.begin(); it!=mecDb.end(); it++){
@@ -143,6 +167,7 @@ ModifyPacketData_MEC (UdpClientHelper udpclient, Ptr <Application> app )
       pos_y=std::to_string(it->second[1]);
       velo_x=std::to_string(it->second[2]);
       velo_y=std::to_string(it->second[3]);   
+      angle_str=std::to_string(it->second[4]);
       
       //Each data element in the packet is separated by "/"
       sending_data.append(nodeID); sending_data.append("/");
@@ -150,6 +175,7 @@ ModifyPacketData_MEC (UdpClientHelper udpclient, Ptr <Application> app )
       sending_data.append(pos_y); sending_data.append("/");
       sending_data.append(velo_x); sending_data.append("/");
       sending_data.append(velo_y); sending_data.append("/");
+      sending_data.append(angle_str); sending_data.append("/");
    }
     
    udpclient.SetFill(app, sending_data);
@@ -164,7 +190,7 @@ PrintDataBase ()
   std::cout << "Start MEC Database print at "<< Simulator::Now()<<std::endl;
   for(it=mecDb.begin(); it!=mecDb.end(); it++){
      std::cout << "key: "<< it->first<<std::endl;
-     for(uint32_t i=0; i<5; i++){
+     for(uint32_t i=0; i<6; i++){
         std::cout <<"value: "<< it->second[i] <<std::endl;
      }
    }
@@ -173,7 +199,7 @@ PrintDataBase ()
 }
 
 /* --> 실험에선 보행자측에서 속도 확인하면서 멈추거나 느리면 자체적으로 자신의 데이터를 DB에서 지움
-/* --> 그러나 실제에서는 MEC server의 데이터를 보행자가 지울 수 없으므로 아래와 같은 기능이 필요할 
+   --> 그러나 실제에서는 MEC server의 데이터를 보행자가 지울 수 없으므로 아래와 같은 기능이 필요할 
 
 
 //이 함수는 100mesec마다 호출되어서 MEC database에 저장된 데이터 중 시스템에 참여하지 않는 보행자의 데이터를 제거
@@ -226,7 +252,7 @@ static void
 MyAlgorithm (Ptr<Node> node, UdpClientHelper udpclient, Ptr <Application> app , uint32_t vehNum)
 {
   uint32_t nodeID = node->GetId();
-  double next, speed;
+  double next;
   if(stopFlag.at(nodeID - vehNum - 3)==0){ }
   else{
 
@@ -540,11 +566,14 @@ main (int argc, char *argv[])
 
   // Install Mobility Model (enb node)
   Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator> ();
-  positionAlloc->Add (Vector(70.0, 180.0, 0));
+  positionAlloc->Add (Vector(102.4, 0.0, 0));
+  positionAlloc->Add (Vector(104.4, 0.0, 0));
+  
   MobilityHelper enbmobility;
   enbmobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
   enbmobility.SetPositionAllocator(positionAlloc);
   enbmobility.Install(enbNodes);
+
 
 
  // Create Ns2MobilityHelper with the specified trace log file as parameter
@@ -562,7 +591,7 @@ main (int argc, char *argv[])
   NetDeviceContainer enbLteDevs = lteHelper->InstallEnbDevice (enbNodes);
   NetDeviceContainer ueLteDevs = lteHelper->InstallUeDevice (ueNodes);
 
-  p2ph.EnablePcapAll("0309tue"); 
+  //p2ph.EnablePcapAll("0309_angle"); 
   
   // Install the IP stack on the UEs 
   internet.Install (ueNodes);
@@ -605,7 +634,8 @@ main (int argc, char *argv[])
   
   }
 
-  
+    Ptr<Node> mec = epcHelper->GetMecNode();
+  enbmobility.Install(mec);
 
 //=======================================application==================================================
 
@@ -786,7 +816,7 @@ main (int argc, char *argv[])
   
   
   
-  AnimationInterface anim("0309.xml");
+  AnimationInterface anim("0309_angle.xml");
   Simulator::Run();
 
   /*GtkConfigStore config;
